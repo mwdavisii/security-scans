@@ -1,0 +1,216 @@
+# Reusable `security-scans` workflow: the stand-in for the security team's scanners. App repos call it with
+#   uses: <owner>/security-scans/.github/workflows/scan.yml@main
+# from a job named `security-scans`, so the checks are `security-scans / semgrep` and `security-scans / trivy`.
+# It is meant for the `pull_request` and `push` triggers only (never a trigger that hands secrets to forks), takes no inputs and no
+# secrets, and the scan jobs hold a read-only token. Only the separate `comment` job can write, and it never touches the app repo. It never runs the repository's code except the `docker build` of its
+# root Dockerfile (see scripts/build_image.sh for what limits that).
+name: scan
+
+on:
+  workflow_call:
+
+permissions: {}
+
+env:
+  SEMGREP_IMAGE: docker.io/semgrep/semgrep@sha256:81474464c1f07483ba0682a44787fd93c91397419762a04abe2bafaae396304b # 1.181.0
+  TRIVY_IMAGE: docker.io/aquasec/trivy@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222 # 0.76.0
+  # Tuning lives here, in the security team's repo, not in inputs a calling repo could weaken.
+  # Semgrep registry rulesets (space separated) added to the vendored rules/. Registry rules are fetched at run time and
+  # change over time; an empty string runs only the vendored rules, with no network.
+  REGISTRY_RULESETS: p/default
+  # Skip Trivy vulnerabilities that have no fixed version yet, so only findings someone can act on fail the check.
+  IGNORE_UNFIXED: "true"
+
+jobs:
+  semgrep:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      # Fail closed before any checkout: if these contexts were ever empty, actions/checkout would fall back to the
+      # CALLING repo and the job would run scripts that the pull request controls.
+      - name: Check where the scripts come from
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "::error::job.workflow_repository is empty or not owner/name"; exit 1; }
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is not a 40-character commit"; exit 1; }
+          [ "${WORKFLOW_REPOSITORY,,}" != "${CALLER_REPOSITORY,,}" ] || { echo "::error::the scripts would come from the calling repository"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: src
+
+      # The scripts and rules come from the exact commit of this workflow file, not from the repository under test.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: scans
+          persist-credentials: false
+          sparse-checkout: |
+            scripts
+            rules
+
+      - name: Run Semgrep
+        run: bash scans/scripts/run_semgrep.sh
+
+      - name: Report (annotations, summary, verdict)
+        if: always()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python3 scans/scripts/sarif_report.py --tool semgrep --root src --fail-on error --annotate \
+            --summary "$GITHUB_STEP_SUMMARY" --run-url "$RUN_URL" out/semgrep.sarif
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: security-scans-semgrep
+          path: |
+            out/semgrep.sarif
+          if-no-files-found: warn
+
+  trivy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      # Fail closed before any checkout: if these contexts were ever empty, actions/checkout would fall back to the
+      # CALLING repo and the job would run scripts that the pull request controls.
+      - name: Check where the scripts come from
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "::error::job.workflow_repository is empty or not owner/name"; exit 1; }
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is not a 40-character commit"; exit 1; }
+          [ "${WORKFLOW_REPOSITORY,,}" != "${CALLER_REPOSITORY,,}" ] || { echo "::error::the scripts would come from the calling repository"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: src
+
+      # The scripts and rules come from the exact commit of this workflow file, not from the repository under test.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: scans
+          persist-credentials: false
+          sparse-checkout: |
+            scripts
+            rules
+
+      - name: "Trivy: repository (vulnerabilities, misconfigurations, secrets)"
+        run: bash scans/scripts/run_trivy.sh fs
+
+      - name: Build the image (not pushed)
+        id: build
+        run: bash scans/scripts/build_image.sh
+
+      - name: "Trivy: image"
+        if: steps.build.outputs.built == 'true'
+        run: bash scans/scripts/run_trivy.sh image
+
+      - name: Report (annotations, summary, verdict)
+        if: always()
+        env:
+          BUILT: ${{ steps.build.outputs.built }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          files=(out/trivy-fs.sarif)
+          if [ "$BUILT" = true ]; then files+=(out/trivy-image.sarif); fi
+          python3 scans/scripts/sarif_report.py --tool trivy --root src --fail-on error --annotate \
+            --summary "$GITHUB_STEP_SUMMARY" --run-url "$RUN_URL" --outside-label "container image" "${files[@]}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: security-scans-trivy
+          path: |
+            out/trivy-fs.sarif
+            out/trivy-image.sarif
+          if-no-files-found: warn
+
+  # Not a required check. It only posts the PR comments, and it is the only job that can write to the pull request.
+  # It reads the scan jobs' SARIF artifacts, rebuilds the markdown with the trusted script, and never checks out
+  # or runs anything from the app repo. Fork PRs skip it (their token is read-only).
+  comment:
+    needs: [semgrep, trivy]
+    if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # Fail closed before any checkout: if these contexts were ever empty, actions/checkout would fall back to the
+      # CALLING repo and the job would run scripts that the pull request controls.
+      - name: Check where the scripts come from
+        env:
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$WORKFLOW_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$ ]] || { echo "::error::job.workflow_repository is empty or not owner/name"; exit 1; }
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::job.workflow_sha is not a 40-character commit"; exit 1; }
+          [ "${WORKFLOW_REPOSITORY,,}" != "${CALLER_REPOSITORY,,}" ] || { echo "::error::the scripts would come from the calling repository"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: scans
+          persist-credentials: false
+          sparse-checkout: scripts
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: security-scans-semgrep
+          path: semgrep
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          name: security-scans-trivy
+          path: trivy
+
+      - name: Comment on the PR
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          SEMGREP_RESULT: ${{ needs.semgrep.result }}
+          TRIVY_RESULT: ${{ needs.trivy.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          for tool in semgrep trivy; do
+            files=()
+            for f in "$tool"/*.sarif; do
+              if [ -f "$f" ]; then files+=("$f"); fi
+            done
+            # No SARIF at all means the scan did not finish: the report then says so instead of passing.
+            if [ "${#files[@]}" -eq 0 ]; then files=("$tool/missing.sarif"); fi
+            # A scan job that did not succeed is never reported as passed, whatever SARIF it left behind.
+            if [ "$tool" = semgrep ]; then result="$SEMGREP_RESULT"; else result="$TRIVY_RESULT"; fi
+            rc=0
+            python3 scans/scripts/sarif_report.py --tool "$tool" --fail-on error --outside-label "container image" --job-result "$result" \
+              --markdown "$tool.md" --run-url "$RUN_URL" "${files[@]}" > /dev/null || rc=$?
+            if [ "$rc" -gt 2 ]; then exit "$rc"; fi
+            bash scans/scripts/post_comment.sh "$tool" "$tool.md"
+          done

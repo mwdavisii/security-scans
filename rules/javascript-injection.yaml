@@ -1,0 +1,42 @@
+rules:
+  - id: javascript.child-process-dynamic
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: child_process exec or execSync with a command built at run time is command injection if any part is user input. Use execFile or spawn with an argument array.
+    metadata: {category: security, cwe: "CWE-78"}
+    patterns:
+      - pattern-either:
+          - pattern: $CP.exec($CMD, ...)
+          - pattern: $CP.execSync($CMD, ...)
+          - pattern: exec($CMD, ...)
+          - pattern: execSync($CMD, ...)
+      - pattern-not: $CP.exec("...", ...)
+      - pattern-not: $CP.execSync("...", ...)
+      - pattern-not: exec("...", ...)
+      - pattern-not: execSync("...", ...)
+      - metavariable-regex:
+          metavariable: $CP
+          regex: ^(child_process|cp|childProcess)$
+
+  - id: javascript.eval-dynamic
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: eval or new Function on a value that is not a literal runs arbitrary code if any part is user input.
+    metadata: {category: security, cwe: "CWE-95"}
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: new Function(..., $X)
+      - pattern-not: eval("...")
+      - pattern-not: new Function(..., "...")
+
+  - id: javascript.sql-built-from-strings
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: An SQL statement built with string concatenation or a template literal is SQL injection if any part is user input. Use query parameters.
+    metadata: {category: security, cwe: "CWE-89"}
+    patterns:
+      - pattern-either:
+          - pattern: $DB.query($Q + ..., ...)
+          - pattern: $DB.query(`...${...}...`, ...)
+      - pattern-not: $DB.query("..." + "...", ...)

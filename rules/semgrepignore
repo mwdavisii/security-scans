@@ -1,0 +1,2 @@
+# Used instead of any .semgrepignore in the repository under test. The image build copies the whole tree, so scan the whole tree.
+.git/

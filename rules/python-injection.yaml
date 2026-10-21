@@ -1,0 +1,58 @@
+rules:
+  - id: python.subprocess-shell-true
+    languages: [python]
+    severity: ERROR
+    message: A subprocess call with shell=True runs its command through a shell. If any part of the command is user input, this is command injection. Pass an argument list and leave shell off.
+    metadata: {category: security, cwe: "CWE-78"}
+    patterns:
+      - pattern: subprocess.$FUNC(..., shell=True, ...)
+      - pattern-not: subprocess.$FUNC("...", ..., shell=True, ...)
+
+  - id: python.os-system-dynamic
+    languages: [python]
+    severity: ERROR
+    message: os.system or os.popen with a command built at run time is command injection if any part is user input. Use subprocess with an argument list.
+    metadata: {category: security, cwe: "CWE-78"}
+    patterns:
+      - pattern-either:
+          - pattern: os.system($CMD)
+          - pattern: os.popen($CMD)
+      - pattern-not: os.system("...")
+      - pattern-not: os.popen("...")
+
+  - id: python.sql-built-from-strings
+    languages: [python]
+    severity: ERROR
+    message: An SQL statement built with string concatenation, an f-string, % formatting, or .format() is SQL injection if any part is user input. Use query parameters.
+    metadata: {category: security, cwe: "CWE-89"}
+    patterns:
+      - pattern-either:
+          - pattern: $CUR.execute($Q + ..., ...)
+          - pattern: $CUR.execute(f"...{...}...", ...)
+          - pattern: $CUR.execute("..." % ..., ...)
+          - pattern: $CUR.execute("...".format(...), ...)
+          - pattern: $CUR.executescript(f"...{...}...")
+      - pattern-not: $CUR.execute("..." + "...", ...)
+
+  - id: python.eval-or-exec-dynamic
+    languages: [python]
+    severity: ERROR
+    message: eval or exec on a value that is not a literal runs arbitrary code if any part is user input.
+    metadata: {category: security, cwe: "CWE-95"}
+    patterns:
+      - pattern-either:
+          - pattern: eval($X)
+          - pattern: exec($X)
+      - pattern-not: eval("...")
+      - pattern-not: exec("...")
+
+  - id: python.unsafe-deserialization
+    languages: [python]
+    severity: WARNING
+    message: pickle, marshal, and yaml.load without a safe loader can run code embedded in the data. Use json or yaml.safe_load for data you do not fully control.
+    metadata: {category: security, cwe: "CWE-502"}
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: marshal.loads(...)
+      - pattern: yaml.load($X)
