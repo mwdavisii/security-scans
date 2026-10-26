@@ -8,6 +8,7 @@
 #   SCANS_TRIVY_CACHE     cache directory for the vulnerability database (default ./trivy-cache).
 #   SCANS_TRIVY_OFFLINE   "true" runs with no network and the cached database (local runs; download the database first).
 #   SCANS_TRIVY_NETWORK   optional docker network for the database download in local runs (for example "host").
+#   SCANS_REPOSITORY      owner/name of the repository under test; its exceptions/trivy/<owner>/<name>.yaml applies.
 #
 # The container's working directory is not the repository, so a trivy.yaml, .trivyignore, or secret config inside
 # the repository under test is never read: only the flags below apply.
@@ -37,13 +38,19 @@ elif [ -n "${SCANS_TRIVY_NETWORK:-}" ]; then
 fi
 
 mounts=(-v "$cache:/cache" -v "$PWD/out:/out")
-# The platform's exceptions come from this repo's rules/, next to this script, never from the repository under test.
-exceptions="$here/../rules/trivyignore.yaml"
-if [ -f "$exceptions" ] && [ ! -L "$exceptions" ]; then
-  mounts+=(-v "$(cd "$(dirname "$exceptions")" && pwd)/trivyignore.yaml:/rules/trivyignore.yaml:ro")
-  common+=(--ignorefile /rules/trivyignore.yaml)
-  ids=$(awk '/^ *- id:/ {id=$3} /^ *expired_at:/ {printf "%s%s (until %s)", sep, id, $2; sep=", "}' "$exceptions")
-  [ -z "$ids" ] || echo "::notice title=Platform scan exceptions::Not reported until their date: $ids. See rules/trivyignore.yaml in the security-scans repo."
+# The platform's exceptions for the repository under test come from this repo's exceptions/trivy/<owner>/<repo>.yaml,
+# never from the repository under test. Without SCANS_REPOSITORY (a local run) no exceptions apply.
+if [ -n "${SCANS_REPOSITORY:-}" ]; then
+  [[ "$SCANS_REPOSITORY" =~ ^[A-Za-z0-9-]+/[A-Za-z0-9_-][A-Za-z0-9._-]*$ && "$SCANS_REPOSITORY" != */.* ]] \
+    || { echo "::error::SCANS_REPOSITORY is not owner/name"; exit 1; }
+  repo="${SCANS_REPOSITORY,,}"
+  exceptions="$here/../exceptions/trivy/$repo.yaml"
+  if [ -f "$exceptions" ] && [ ! -L "$exceptions" ]; then
+    mounts+=(-v "$(cd "$(dirname "$exceptions")" && pwd)/$(basename "$exceptions"):/exceptions/trivyignore.yaml:ro")
+    common+=(--ignorefile /exceptions/trivyignore.yaml)
+    ids=$(awk '/^ *- id:/ {id=$3} /^ *expired_at:/ {printf "%s%s (until %s)", sep, id, $2; sep=", "}' "$exceptions")
+    [ -z "$ids" ] || echo "::notice title=Platform scan exceptions for $repo::Not reported until their date: $ids. See exceptions/trivy/$repo.yaml in the security-scans repo."
+  fi
 fi
 if [ "$mode" = fs ]; then
   [ -d src ] || { echo "::error::no src directory to scan"; exit 1; }

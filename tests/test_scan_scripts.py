@@ -192,34 +192,67 @@ def test_trivy_does_not_read_ignore_files_from_the_scanned_tree(env, tmp_path):
     assert not any(a.endswith(":/") or a.endswith(":/work") for a in call)
 
 
-EXCEPTIONS = SCRIPTS.parent / "rules/trivyignore.yaml"
+EXCEPTIONS = SCRIPTS.parent / "exceptions/trivy"
+APP = "mwdavisii/hello-app"
 
 
 @pytest.mark.parametrize("mode", ["fs", "image"])
-def test_trivy_reads_the_platform_exceptions_from_this_repo_read_only(env, tmp_path, mode):
+def test_trivy_reads_only_the_scanned_repository_s_exceptions_read_only(env, tmp_path, mode):
     (tmp_path / "out").mkdir()
     (tmp_path / "out/image.tar").write_bytes(b"tar")
-    out = run(env, tmp_path, "run_trivy.sh", mode, TRIVY_IMAGE=TRIVY, IGNORE_UNFIXED="false")
+    out = run(env, tmp_path, "run_trivy.sh", mode, TRIVY_IMAGE=TRIVY, IGNORE_UNFIXED="false", SCANS_REPOSITORY=APP)
     assert out.returncode == 0, out.stderr
     [call] = calls(env)
-    assert f"{EXCEPTIONS.resolve()}:/rules/trivyignore.yaml:ro" in call
-    assert call[call.index("--ignorefile") + 1] == "/rules/trivyignore.yaml"
+    assert f"{(EXCEPTIONS / f'{APP}.yaml').resolve()}:/exceptions/trivyignore.yaml:ro" in call
+    assert call[call.index("--ignorefile") + 1] == "/exceptions/trivyignore.yaml"
+    assert not any("golden-road-portal" in a for a in call), "another repository's exceptions never apply"
 
 
-def test_trivy_names_the_exceptions_in_effect(env, tmp_path):
-    out = run(env, tmp_path, "run_trivy.sh", "fs", TRIVY_IMAGE=TRIVY, IGNORE_UNFIXED="false")
-    [notice] = [line for line in out.stdout.splitlines() if line.startswith("::notice title=Platform scan exceptions::")]
+def test_trivy_names_the_repository_and_the_exceptions_in_effect(env, tmp_path):
+    out = run(env, tmp_path, "run_trivy.sh", "fs", TRIVY_IMAGE=TRIVY, IGNORE_UNFIXED="false", SCANS_REPOSITORY=APP)
+    [notice] = [line for line in out.stdout.splitlines() if line.startswith("::notice title=Platform scan exceptions for mwdavisii/hello-app::")]
     assert "CVE-2026-84782 (until 2026-11-09)" in notice
+
+
+def test_the_repository_name_is_matched_without_case(env, tmp_path):
+    run(env, tmp_path, "run_trivy.sh", "fs", TRIVY_IMAGE=TRIVY, IGNORE_UNFIXED="false", SCANS_REPOSITORY="MWDavisII/Hello-App")
+    assert "--ignorefile" in calls(env)[0]
+
+
+@pytest.mark.parametrize("repo", [None, "mwdavisii/no-such-app"])
+def test_a_repository_without_exceptions_gets_none(env, tmp_path, repo):
+    extra = {"SCANS_REPOSITORY": repo} if repo else {}
+    out = run(env, tmp_path, "run_trivy.sh", "fs", TRIVY_IMAGE=TRIVY, IGNORE_UNFIXED="false", **extra)
+    assert out.returncode == 0, out.stderr
+    assert "--ignorefile" not in calls(env)[0] and "::notice" not in out.stdout
+
+
+@pytest.mark.parametrize("repo", ["mwdavisii", "mwdavisii/../x", "../mwdavisii/hello-app", "mwdavisii/hello-app/x", "mwdavisii/.hidden",
+                                  "mwdavisii/a b", "mwdavisii/a\nb"])
+def test_an_odd_repository_name_is_refused_before_anything_runs(env, tmp_path, repo):
+    out = run(env, tmp_path, "run_trivy.sh", "fs", TRIVY_IMAGE=TRIVY, IGNORE_UNFIXED="false", SCANS_REPOSITORY=repo)
+    assert out.returncode != 0 and calls(env) == []
 
 
 def test_every_platform_exception_has_a_reason_and_an_end_date():
     """An exception without expired_at never ends; one without a statement can't be reviewed."""
-    entries = EXCEPTIONS.read_text().split("\n  - id: ")[1:]
-    assert entries, "the file holds no entries"
-    for entry in entries:
-        assert "\n    statement: " in entry and "\n    expired_at: " in entry, entry.splitlines()[0]
-        date = entry.split("\n    expired_at: ")[1].split()[0]
-        assert len(date) == 10 and date[4] == date[7] == "-", date
+    files = sorted(EXCEPTIONS.glob("*/*.yaml"))
+    assert files, "no exception files"
+    for path in files:
+        assert path.relative_to(EXCEPTIONS).as_posix() == path.relative_to(EXCEPTIONS).as_posix().lower(), f"{path}: names are lowercase"
+        entries = path.read_text().split("\n  - id: ")[1:]
+        assert entries, f"{path} holds no entries"
+        for entry in entries:
+            assert "\n    statement: " in entry and "\n    expired_at: " in entry, f"{path}: {entry.splitlines()[0]}"
+            date = entry.split("\n    expired_at: ")[1].split()[0]
+            assert len(date) == 10 and date[4] == date[7] == "-", f"{path}: {date}"
+
+
+def test_the_semgrep_rules_directory_holds_only_semgrep_rules():
+    """Semgrep loads every YAML file in rules/ as a rule file, so anything else there breaks every scan."""
+    for path in (SCRIPTS.parent / "rules").iterdir():
+        if path.suffix in (".yaml", ".yml"):
+            assert path.read_text().lstrip().startswith("rules:"), f"{path.name} is not a Semgrep rule file"
 
 
 @pytest.mark.parametrize("args", [[], ["other"], ["fs", "extra"]])

@@ -111,8 +111,11 @@ jobs:
           sparse-checkout: |
             scripts
             rules
+            exceptions
 
       - name: "Trivy: repository (vulnerabilities, misconfigurations, secrets)"
+        env:
+          SCANS_REPOSITORY: ${{ github.repository }}
         run: bash scans/scripts/run_trivy.sh fs
 
       - name: Build the image (not pushed)
@@ -121,6 +124,8 @@ jobs:
 
       - name: "Trivy: image"
         if: steps.build.outputs.built == 'true'
+        env:
+          SCANS_REPOSITORY: ${{ github.repository }}
         run: bash scans/scripts/run_trivy.sh image
 
       - name: Report (annotations, summary, verdict)
