@@ -37,6 +37,14 @@ elif [ -n "${SCANS_TRIVY_NETWORK:-}" ]; then
 fi
 
 mounts=(-v "$cache:/cache" -v "$PWD/out:/out")
+# The platform's exceptions come from this repo's rules/, next to this script, never from the repository under test.
+exceptions="$here/../rules/trivyignore.yaml"
+if [ -f "$exceptions" ] && [ ! -L "$exceptions" ]; then
+  mounts+=(-v "$(cd "$(dirname "$exceptions")" && pwd)/trivyignore.yaml:/rules/trivyignore.yaml:ro")
+  common+=(--ignorefile /rules/trivyignore.yaml)
+  ids=$(awk '/^ *- id:/ {id=$3} /^ *expired_at:/ {printf "%s%s (until %s)", sep, id, $2; sep=", "}' "$exceptions")
+  [ -z "$ids" ] || echo "::notice title=Platform scan exceptions::Not reported until their date: $ids. See rules/trivyignore.yaml in the security-scans repo."
+fi
 if [ "$mode" = fs ]; then
   [ -d src ] || { echo "::error::no src directory to scan"; exit 1; }
   mounts+=(-v "$PWD/src:/src:ro")

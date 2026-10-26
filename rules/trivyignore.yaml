@@ -1,0 +1,11 @@
+# Platform exceptions to the Trivy scan. Owned by this repo, never by an app: an app's own .trivyignore is never read.
+# Every entry needs a statement (why it is safe for now, and what ends it) and an expired_at date. After that date Trivy
+# reports the finding again by itself, so an exception that is forgotten fails closed. Remove the entry when its fix lands.
+vulnerabilities:
+  - id: CVE-2026-84782
+    statement: >-
+      OpenSSL DTLS retransmission out-of-bounds read, in libssl3/openssl of the platform's Debian 12 base images.
+      The golden-road apps serve plain HTTP behind the platform edge and use no DTLS. Debian's fix (3.0.22-1~deb12u2,
+      DLA-4859-1) is not yet in python:3.12-slim-bookworm or distroless/nodejs22-debian12; remove this entry when the
+      builder pins base images that carry it.
+    expired_at: 2026-11-09

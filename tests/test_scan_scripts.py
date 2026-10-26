@@ -192,6 +192,36 @@ def test_trivy_does_not_read_ignore_files_from_the_scanned_tree(env, tmp_path):
     assert not any(a.endswith(":/") or a.endswith(":/work") for a in call)
 
 
+EXCEPTIONS = SCRIPTS.parent / "rules/trivyignore.yaml"
+
+
+@pytest.mark.parametrize("mode", ["fs", "image"])
+def test_trivy_reads_the_platform_exceptions_from_this_repo_read_only(env, tmp_path, mode):
+    (tmp_path / "out").mkdir()
+    (tmp_path / "out/image.tar").write_bytes(b"tar")
+    out = run(env, tmp_path, "run_trivy.sh", mode, TRIVY_IMAGE=TRIVY, IGNORE_UNFIXED="false")
+    assert out.returncode == 0, out.stderr
+    [call] = calls(env)
+    assert f"{EXCEPTIONS.resolve()}:/rules/trivyignore.yaml:ro" in call
+    assert call[call.index("--ignorefile") + 1] == "/rules/trivyignore.yaml"
+
+
+def test_trivy_names_the_exceptions_in_effect(env, tmp_path):
+    out = run(env, tmp_path, "run_trivy.sh", "fs", TRIVY_IMAGE=TRIVY, IGNORE_UNFIXED="false")
+    [notice] = [line for line in out.stdout.splitlines() if line.startswith("::notice title=Platform scan exceptions::")]
+    assert "CVE-2026-84782 (until 2026-11-09)" in notice
+
+
+def test_every_platform_exception_has_a_reason_and_an_end_date():
+    """An exception without expired_at never ends; one without a statement can't be reviewed."""
+    entries = EXCEPTIONS.read_text().split("\n  - id: ")[1:]
+    assert entries, "the file holds no entries"
+    for entry in entries:
+        assert "\n    statement: " in entry and "\n    expired_at: " in entry, entry.splitlines()[0]
+        date = entry.split("\n    expired_at: ")[1].split()[0]
+        assert len(date) == 10 and date[4] == date[7] == "-", date
+
+
 @pytest.mark.parametrize("args", [[], ["other"], ["fs", "extra"]])
 def test_trivy_takes_exactly_fs_or_image(env, tmp_path, args):
     assert run(env, tmp_path, "run_trivy.sh", *args, TRIVY_IMAGE=TRIVY, IGNORE_UNFIXED="false").returncode != 0 and calls(env) == []
