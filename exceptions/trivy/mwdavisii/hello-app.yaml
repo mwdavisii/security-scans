@@ -1,6 +1,7 @@
-# Platform exceptions to the Trivy scan. Owned by this repo, never by an app: an app's own .trivyignore is never read.
-# Every entry needs a statement (why it is safe for now, and what ends it) and an expired_at date. After that date Trivy
-# reports the finding again by itself, so an exception that is forgotten fails closed. Remove the entry when its fix lands.
+# Platform exceptions to the Trivy scan of mwdavisii/hello-app, and of no other repository. Owned by this repo, never by
+# the app: an app's own .trivyignore is never read. Every entry needs a statement (why it is safe for now, and what ends it)
+# and an expired_at date. After that date Trivy reports the finding again by itself, so a forgotten exception fails closed.
+# Remove the entry when its fix lands.
 vulnerabilities:
   - id: CVE-2026-84782
     statement: >-

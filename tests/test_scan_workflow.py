@@ -95,7 +95,16 @@ def test_checkouts_keep_no_credentials_and_scripts_come_from_this_workflows_own_
         assert checkouts[0]["with"]["path"] == "src" and "repository" not in checkouts[0]["with"] and "ref" not in checkouts[0]["with"]
     scans = checkouts[-1]
     assert scans["with"]["repository"] == "${{ job.workflow_repository }}" and scans["with"]["ref"] == "${{ job.workflow_sha }}"
-    assert scans["with"]["path"] == "scans" and set(scans["with"]["sparse-checkout"].split()) <= {"scripts", "rules"}
+    assert scans["with"]["path"] == "scans" and set(scans["with"]["sparse-checkout"].split()) <= {"scripts", "rules", "exceptions"}
+    # Only Trivy reads the platform's exceptions; Semgrep gets the rules alone.
+    assert ("exceptions" in scans["with"]["sparse-checkout"].split()) == (job == "trivy")
+
+
+def test_each_trivy_run_names_the_repository_its_exceptions_belong_to():
+    runs = [s for s in steps("trivy") if "run_trivy.sh" in s.get("run", "")]
+    assert len(runs) == 2
+    for s in runs:
+        assert s["env"] == {"SCANS_REPOSITORY": "${{ github.repository }}"}, s["name"]
 
 
 def guard_script():
