@@ -211,7 +211,7 @@ def test_trivy_reads_only_the_scanned_repository_s_exceptions_read_only(env, tmp
 def test_trivy_names_the_repository_and_the_exceptions_in_effect(env, tmp_path):
     out = run(env, tmp_path, "run_trivy.sh", "fs", TRIVY_IMAGE=TRIVY, IGNORE_UNFIXED="false", SCANS_REPOSITORY=APP)
     [notice] = [line for line in out.stdout.splitlines() if line.startswith("::notice title=Platform scan exceptions for mwdavisii/hello-app::")]
-    assert "CVE-2026-84782 (until 2026-11-09)" in notice
+    assert "CVE-2026-76844 (until 2026-11-30)" in notice
 
 
 def test_the_repository_name_is_matched_without_case(env, tmp_path):
